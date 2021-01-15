@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"strings"
 	"time"
 
 	whatsapp "github.com/Rhymen/go-whatsapp"
@@ -16,6 +17,7 @@ import (
 //WppScrapper TODO:
 type WppScrapper struct {
 	WhatsappConnection *whatsapp.Conn
+	messageHandler     *MessageHandler
 	ChatsToScrap       *list.List
 	isScrapping        bool
 }
@@ -79,6 +81,8 @@ func (wppscrapper *WppScrapper) ReAuth(qrChan chan<- string, uuid string) (strin
 	return uuid, nil
 }
 
+//TODO: Implementar uma forma boa de saber se a inicialização ja terminou (pegou as informações dos chats)
+
 //GetAllChats recupera todos os Chats
 func (wppscrapper *WppScrapper) GetAllChats() map[string]whatsapp.Chat {
 	return wppscrapper.WhatsappConnection.Store.Chats
@@ -86,18 +90,25 @@ func (wppscrapper *WppScrapper) GetAllChats() map[string]whatsapp.Chat {
 
 //StartScrapper Inicia a coleta de mensagens
 func (wppscrapper *WppScrapper) StartScrapper() {
-	messageHandler := MessageHandler{
-		c: wppscrapper.WhatsappConnection,
-	}
 
-	var duration_Milliseconds time.Duration = 1 * time.Millisecond
+	//TODO: Instanciar quantidade definida de Workers e controlar a quantidade que esta executando. Ficar "escutando" para parar "matar" um e começar outro
+	for _, chat := range wppscrapper.WhatsappConnection.Store.Chats {
 
-	for k := range wppscrapper.WhatsappConnection.Store.Chats {
-
-		wppscrapper.WhatsappConnection.LoadFullChatHistory(k, 1, duration_Milliseconds, &messageHandler)
+		contain := strings.Contains(chat.Name, "Icaro")
+		if !contain {
+			continue
+		}
+		fmt.Println("---------------\n\n\n\nSTART NEW CHAT\n\n\n\n----------------")
+		messageHandler := CreateMessageHandler(wppscrapper.WhatsappConnection, &chat)
+		go messageHandler.StartChatScrapper(false)
 	}
 
 	wppscrapper.isScrapping = true
+	return
+}
+
+func (wppscrapper *WppScrapper) StopScrapper() {
+	//TODO: Implementar
 }
 
 func readSession(uuid string) (whatsapp.Session, error) {

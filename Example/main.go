@@ -44,6 +44,7 @@ func (h *MessageHandler) HandleTextMessage(message whatsapp.TextMessage) {
 }
 
 func main() {
+
 	scrapper := wppscrapper.InitializeConnection()
 
 	qr := make(chan string)
@@ -75,5 +76,8 @@ func main() {
 
 	fmt.Println("---------------\n\n\n\nSTART SCRAPPER\n\n\n\n----------------")
 	scrapper.StartScrapper()
+	<-time.After(1000000000 * time.Second)
+	fmt.Println("---------------\n\n\n\nSTOP SCRAPPER\n\n\n\n----------------")
+	scrapper.StopScrapper()
 
 }
