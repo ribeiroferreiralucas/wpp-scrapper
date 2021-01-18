@@ -7,22 +7,22 @@ import (
 	"log"
 	"os"
 	"path"
-	"strings"
 	"time"
 
 	whatsapp "github.com/Rhymen/go-whatsapp"
 	uuid "github.com/pborman/uuid"
 )
 
-//WppScrapper TODO:
+//WppScrapper //TODO:
 type WppScrapper struct {
 	WhatsappConnection *whatsapp.Conn
-	messageHandler     *MessageHandler
-	ChatsToScrap       *list.List
+	chatsToScrap       *list.List
+	chatsScrapping     *list.List
+	chatsScrapped      *list.List
 	isScrapping        bool
 }
 
-//InitializeConnection TODO
+//InitializeConnection //TODO
 func InitializeConnection() *WppScrapper {
 	wppscrapper := &WppScrapper{}
 	var err error
@@ -89,26 +89,63 @@ func (wppscrapper *WppScrapper) GetAllChats() map[string]whatsapp.Chat {
 }
 
 //StartScrapper Inicia a coleta de mensagens
-func (wppscrapper *WppScrapper) StartScrapper() {
+func (wppscrapper *WppScrapper) StartScrapper(resume bool) {
 
-	//TODO: Instanciar quantidade definida de Workers e controlar a quantidade que esta executando. Ficar "escutando" para parar "matar" um e começar outro
+	wppscrapper.chatsScrapped = list.New().Init()
+	wppscrapper.chatsScrapping = list.New().Init()
+	wppscrapper.chatsToScrap = list.New().Init()
+
 	for _, chat := range wppscrapper.WhatsappConnection.Store.Chats {
-
-		contain := strings.Contains(chat.Name, "Icaro")
-		if !contain {
-			continue
-		}
-		fmt.Println("---------------\n\n\n\nSTART NEW CHAT\n\n\n\n----------------")
-		messageHandler := CreateMessageHandler(wppscrapper.WhatsappConnection, &chat)
-		go messageHandler.StartChatScrapper(false)
+		chatHandler := CreateMessageHandler(wppscrapper.WhatsappConnection, chat)
+		wppscrapper.chatsToScrap.PushFront(chatHandler)
 	}
-
-	wppscrapper.isScrapping = true
+	go wppscrapper.startScrapper(resume)
 	return
 }
 
 func (wppscrapper *WppScrapper) StopScrapper() {
-	//TODO: Implementar
+
+	wppscrapper.isScrapping = false
+
+	for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
+		chatHandler := scrappingElement.Value.(ChatHandler)
+		chatHandler.PauseChatScrapper()
+	}
+}
+
+func (wppscrapper *WppScrapper) startScrapper(resume bool) {
+	simultSize := 1
+	//TODO: Tratar o final e errosx
+	wppscrapper.isScrapping = true
+
+	for {
+
+		if !wppscrapper.isScrapping {
+			return
+		}
+
+		for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
+
+			scrapping := scrappingElement.Value.(*ChatHandler)
+
+			if scrapping.IsScrapped() {
+				wppscrapper.chatsScrapping.Remove(scrappingElement)
+				wppscrapper.chatsScrapped.PushBack(scrapping)
+			}
+		}
+
+		if wppscrapper.chatsScrapping.Len() < simultSize {
+			handlerToStart := wppscrapper.chatsToScrap.Front()
+			wppscrapper.chatsScrapping.PushBack(handlerToStart.Value)
+			wppscrapper.chatsToScrap.Remove(handlerToStart)
+
+			chat := handlerToStart.Value.(*ChatHandler)
+			go chat.StartChatScrapper(resume)
+			continue
+		}
+
+		<-time.After(100 * time.Millisecond)
+	}
 }
 
 func readSession(uuid string) (whatsapp.Session, error) {

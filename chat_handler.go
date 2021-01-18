@@ -8,21 +8,21 @@ import (
 	"time"
 
 	whatsapp "github.com/Rhymen/go-whatsapp"
+
 	"github.com/Rhymen/go-whatsapp/binary/proto"
 )
 
 var headers = []string{"message_id", "timestamp", "chat_name", "chat", "sender", "is_forwarded", "from_me", "quoted_message_id", "message"}
 
-//MessageHandler //TODO
-type MessageHandler struct {
-	Chat               *whatsapp.Chat
-	IsScrapping        bool //TODO: Transformar em readonly
-	WasScrapped        bool
+//ChatHandler //TODO
+type ChatHandler struct {
+	chat               *whatsapp.Chat
+	isScrapping        bool
+	isScrapped         bool
+	c                  *whatsapp.Conn
 	lastMessage        string
 	lastMessageOwner   bool
-	c                  *whatsapp.Conn
 	shouldStopScrapper bool
-	message            chan Message
 	writer             *csv.Writer
 	file               *os.File
 }
@@ -40,61 +40,86 @@ type Message struct {
 	Text            string
 }
 
-// CreateMessageHandler //TODO
-func CreateMessageHandler(conn *whatsapp.Conn, chat *whatsapp.Chat) *MessageHandler {
+type ChatInfo struct {
+}
 
-	return &MessageHandler{
+// CreateMessageHandler //TODO
+func CreateMessageHandler(conn *whatsapp.Conn, chat whatsapp.Chat) *ChatHandler {
+
+	h := ChatHandler{
 		c:                  conn,
-		Chat:               chat,
+		chat:               &chat,
+		isScrapping:        false,
+		isScrapped:         false,
 		lastMessage:        "",
 		lastMessageOwner:   true,
 		shouldStopScrapper: false,
 	}
+
+	h.isScrapped = h.hasFinalFile()
+	return &h
+
 }
 
 // StartChatScrapper //TODO
-func (h *MessageHandler) StartChatScrapper(resume bool) {
+func (h *ChatHandler) StartChatScrapper(resume bool) {
 
-	lastMessage := "trash"
-	h.IsScrapping = true
+	log.Println("Starting Scrap for " + h.chat.Jid)
 
-	if !h.hasTempFile() {
-		h.createWriter()
-		h.writer.Write(headers)
-	} else {
-		h.reopenFile()
+	if resume && h.IsScrapped() {
+		log.Println("Stopped Scrap for " + h.chat.Jid + ". Chat already scrapped and resume mode is on")
+		return
 	}
 
+	if !resume && h.hasFinalFile() {
+		h.deleteFinalFile()
+		log.Println("Deleted Scrapped file for " + h.chat.Jid + ". Resume mode is off")
+	}
+
+	if !resume || !h.hasTempFile() {
+		h.createWriter()
+		h.writer.Write(headers)
+		log.Println("starting Scrap " + h.chat.Jid + ". Resume mode is off")
+	} else {
+		h.reopenFile()
+		log.Println("resuming Scrap " + h.chat.Jid + ". Resume mode is on")
+	}
+
+	h.isScrapping = true
+
+	lastMessage := ""
+	firstIteration := true
 	for {
 
 		if h.shouldStopScrapper {
+			h.stoppedScrapper()
+			log.Println("paused Scrap " + h.chat.Jid)
 			return
 		}
-
-		if lastMessage == h.lastMessage {
+		if !firstIteration && lastMessage == h.lastMessage {
 			h.finishedScrapper()
+			log.Println("finished to Scrap " + h.chat.Jid)
 			return
 		}
 		lastMessage = h.lastMessage
-		h.c.LoadChatMessages(h.Chat.Jid, 1, h.lastMessage, h.lastMessageOwner, false, h)
+		h.c.LoadChatMessages(h.chat.Jid, 1, h.lastMessage, h.lastMessageOwner, false, h)
+
+		firstIteration = false
 	}
 }
 
-// StopChatScrapper //TODO
-func (h *MessageHandler) StopChatScrapper() {
-
-	//TODO: Implementar função adequadamente
+// PauseChatScrapper //TODO
+func (h *ChatHandler) PauseChatScrapper() {
 	h.shouldStopScrapper = true
-	log.Println("STOPED")
 }
 
 //ShouldCallSynchronously //TODO
-func (h *MessageHandler) ShouldCallSynchronously() bool {
+func (h *ChatHandler) ShouldCallSynchronously() bool {
 	return true
 }
 
-//HandleError needs to be implemented to be a valid WhatsApp handler
-func (h *MessageHandler) HandleError(err error) {
+//HandleError //TODO
+func (h *ChatHandler) HandleError(err error) {
 
 	if e, ok := err.(*whatsapp.ErrConnectionFailed); ok {
 		log.Printf("Connection failed, underlying error: %v", e.Err)
@@ -110,8 +135,8 @@ func (h *MessageHandler) HandleError(err error) {
 	}
 }
 
-//HandleTextMessage Optional to be implemented. Implement HandleXXXMessage for the types you need.
-func (h *MessageHandler) HandleTextMessage(message whatsapp.TextMessage) {
+//HandleTextMessage //TODO
+func (h *ChatHandler) HandleTextMessage(message whatsapp.TextMessage) {
 
 	newMessage := toMessage(message, *h)
 	data := toCsv(newMessage)
@@ -121,33 +146,68 @@ func (h *MessageHandler) HandleTextMessage(message whatsapp.TextMessage) {
 }
 
 //HandleRawMessage //TODO
-func (h *MessageHandler) HandleRawMessage(message *proto.WebMessageInfo) {
+func (h *ChatHandler) HandleRawMessage(message *proto.WebMessageInfo) {
 	h.lastMessage = *message.Key.Id
 	h.lastMessageOwner = message.Key.FromMe != nil && *message.Key.FromMe
-	log.Println("lastMessage> " + h.lastMessage)
 }
 
-func (h *MessageHandler) finishedScrapper() {
+func (h *ChatHandler) Chat() *whatsapp.Chat {
+	return h.chat
+}
+
+func (h *ChatHandler) IsScrapping() bool {
+	return h.isScrapping
+}
+
+func (h *ChatHandler) IsScrapped() bool {
+	return h.isScrapped
+}
+
+func (h *ChatHandler) finishedScrapper() {
 
 	h.writer.Flush()
 	h.file.Close()
 
-	err := os.Rename(h.Chat.Jid+"-messages.temp", h.Chat.Jid+"-messages.csv")
+	err := os.Rename(h.chat.Jid+"-messages.temp", h.chat.Jid+"-messages.csv")
 	checkError("Cannot rename file from .temp to .csv", err)
 
-	h.WasScrapped = true
-	h.IsScrapping = false
+	info, _ := h.c.GetGroupMetaData(h.chat.Jid)
+	infoJson := <-info
+	log.Println(infoJson)
+	//TODO: Implementar lógica de recuperar informações do grupo
+
+	h.isScrapped = true
+	h.isScrapping = false
 }
 
-func (h *MessageHandler) hasTempFile() bool {
+func (h *ChatHandler) stoppedScrapper() {
 
-	_, err := os.Stat(h.Chat.Jid + "-messages.temp")
+	h.writer.Flush()
+	h.file.Close()
+
+	h.isScrapped = false
+	h.isScrapping = false
+}
+
+func (h *ChatHandler) hasTempFile() bool {
+
+	_, err := os.Stat(h.chat.Jid + "-messages.temp")
+
+	return err == nil
+}
+func (h *ChatHandler) hasFinalFile() bool {
+
+	_, err := os.Stat(h.chat.Jid + "-messages.csv")
 
 	return err == nil
 }
 
-func (h *MessageHandler) reopenFile() {
-	file, err := os.OpenFile(h.Chat.Jid+"-messages.temp", os.O_APPEND, os.ModeAppend)
+func (h *ChatHandler) deleteFinalFile() {
+	os.Remove(h.chat.Jid + "-messages.csv")
+}
+
+func (h *ChatHandler) reopenFile() {
+	file, err := os.OpenFile(h.chat.Jid+"-messages.temp", os.O_APPEND, os.ModeAppend)
 
 	checkError("Cannot open file", err)
 	reader := csv.NewReader(file)
@@ -163,9 +223,9 @@ func (h *MessageHandler) reopenFile() {
 
 }
 
-func (h *MessageHandler) createWriter() {
+func (h *ChatHandler) createWriter() {
 
-	file, err := os.Create(h.Chat.Jid + "-messages.temp")
+	file, err := os.Create(h.chat.Jid + "-messages.temp")
 	checkError("Cannot create file", err)
 
 	h.writer = csv.NewWriter(file)
@@ -175,7 +235,7 @@ func (h *MessageHandler) createWriter() {
 func toCsv(message Message) []string {
 	return []string{message.MessageID, strconv.FormatUint(message.Timestamp, 10), message.ChatName, message.ChatID, message.Sender, strconv.FormatBool(message.IsForwarded), strconv.FormatBool(message.FromMe), message.QuotedMessageID, message.Text}
 }
-func toMessage(wppMessage whatsapp.TextMessage, handler MessageHandler) Message {
+func toMessage(wppMessage whatsapp.TextMessage, handler ChatHandler) Message {
 
 	var jid string
 	if wppMessage.Info.Source.Participant == nil {

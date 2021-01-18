@@ -75,7 +75,7 @@ func main() {
 	}
 
 	fmt.Println("---------------\n\n\n\nSTART SCRAPPER\n\n\n\n----------------")
-	scrapper.StartScrapper()
+	scrapper.StartScrapper(true)
 	<-time.After(1000000000 * time.Second)
 	fmt.Println("---------------\n\n\n\nSTOP SCRAPPER\n\n\n\n----------------")
 	scrapper.StopScrapper()
