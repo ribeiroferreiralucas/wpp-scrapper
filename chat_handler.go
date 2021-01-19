@@ -1,6 +1,7 @@
 package wppscrapper
 
 import (
+	"container/list"
 	"encoding/csv"
 	"log"
 	"os"
@@ -16,15 +17,17 @@ var headers = []string{"message_id", "timestamp", "chat_name", "chat", "sender",
 
 //ChatHandler //TODO
 type ChatHandler struct {
-	chat               *whatsapp.Chat
-	isScrapping        bool
-	isScrapped         bool
-	c                  *whatsapp.Conn
-	lastMessage        string
-	lastMessageOwner   bool
-	shouldStopScrapper bool
-	writer             *csv.Writer
-	file               *os.File
+	chat                 *whatsapp.Chat
+	messagesPerCallCount int
+	isScrapping          bool
+	isScrapped           bool
+	c                    *whatsapp.Conn
+	lastMessage          string
+	lastMessageOwner     bool
+	shouldStopScrapper   bool
+	collectedMessages    *list.List
+	writer               *csv.Writer
+	file                 *os.File
 }
 
 //Message //TODO
@@ -47,13 +50,15 @@ type ChatInfo struct {
 func CreateMessageHandler(conn *whatsapp.Conn, chat whatsapp.Chat) *ChatHandler {
 
 	h := ChatHandler{
-		c:                  conn,
-		chat:               &chat,
-		isScrapping:        false,
-		isScrapped:         false,
-		lastMessage:        "",
-		lastMessageOwner:   true,
-		shouldStopScrapper: false,
+		messagesPerCallCount: 1,
+		c:                    conn,
+		chat:                 &chat,
+		isScrapping:          false,
+		isScrapped:           false,
+		lastMessage:          "",
+		lastMessageOwner:     true,
+		shouldStopScrapper:   false,
+		collectedMessages:    list.New().Init(),
 	}
 
 	h.isScrapped = h.hasFinalFile()
@@ -102,7 +107,9 @@ func (h *ChatHandler) StartChatScrapper(resume bool) {
 			return
 		}
 		lastMessage = h.lastMessage
-		h.c.LoadChatMessages(h.chat.Jid, 1, h.lastMessage, h.lastMessageOwner, false, h)
+
+		h.c.LoadChatMessages(h.chat.Jid, h.messagesPerCallCount, h.lastMessage, h.lastMessageOwner, false, h)
+		h.writeMessages()
 
 		firstIteration = false
 	}
@@ -120,6 +127,8 @@ func (h *ChatHandler) ShouldCallSynchronously() bool {
 
 //HandleError //TODO
 func (h *ChatHandler) HandleError(err error) {
+
+	//TODO: Implementar tratamento e resposta a erros
 
 	if e, ok := err.(*whatsapp.ErrConnectionFailed); ok {
 		log.Printf("Connection failed, underlying error: %v", e.Err)
@@ -139,20 +148,48 @@ func (h *ChatHandler) HandleError(err error) {
 func (h *ChatHandler) HandleTextMessage(message whatsapp.TextMessage) {
 
 	newMessage := toMessage(message, *h)
-	data := toCsv(newMessage)
-	h.writer.Write(data)
-	h.writer.Flush()
-	log.Println(data)
+	h.collectedMessages.PushFront(newMessage)
+	log.Println(h.collectedMessages.Len())
 }
 
 //HandleRawMessage //TODO
 func (h *ChatHandler) HandleRawMessage(message *proto.WebMessageInfo) {
+
+	if h.collectedMessages.Len() > 1 {
+		return
+	}
+
 	h.lastMessage = *message.Key.Id
 	h.lastMessageOwner = message.Key.FromMe != nil && *message.Key.FromMe
 }
 
+func (h *ChatHandler) writeMessages() {
+
+	for messageNode := h.collectedMessages.Front(); messageNode != nil; messageNode = messageNode.Next() {
+		message := messageNode.Value.(Message)
+		data := toCsv(message)
+		h.writer.Write(data)
+		log.Println(data)
+	}
+
+	h.writer.Flush()
+	h.collectedMessages.Init()
+}
+
 func (h *ChatHandler) Chat() *whatsapp.Chat {
 	return h.chat
+}
+
+func (h *ChatHandler) SetMessagesPerCallCount(messagesPerCallCount int) {
+
+	if messagesPerCallCount < 1 {
+		messagesPerCallCount = 1
+	}
+	h.messagesPerCallCount = messagesPerCallCount
+}
+
+func (h *ChatHandler) GetMessagesPerCallCount() int {
+	return h.messagesPerCallCount
 }
 
 func (h *ChatHandler) IsScrapping() bool {

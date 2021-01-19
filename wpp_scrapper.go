@@ -20,11 +20,16 @@ type WppScrapper struct {
 	chatsScrapping     *list.List
 	chatsScrapped      *list.List
 	isScrapping        bool
+	isFinished         bool
 }
 
 //InitializeConnection //TODO
 func InitializeConnection() *WppScrapper {
-	wppscrapper := &WppScrapper{}
+	wppscrapper := &WppScrapper{
+		isScrapping: false,
+		isFinished:  false,
+	}
+
 	var err error
 	wppscrapper.WhatsappConnection, err = whatsapp.NewConn(10 * time.Second)
 	if err != nil {
@@ -97,15 +102,17 @@ func (wppscrapper *WppScrapper) StartScrapper(resume bool) {
 
 	for _, chat := range wppscrapper.WhatsappConnection.Store.Chats {
 		chatHandler := CreateMessageHandler(wppscrapper.WhatsappConnection, chat)
+		chatHandler.SetMessagesPerCallCount(100)
 		wppscrapper.chatsToScrap.PushFront(chatHandler)
 	}
-	go wppscrapper.startScrapper(resume)
+	go wppscrapper.scrapRoutine(resume)
 	return
 }
 
 func (wppscrapper *WppScrapper) StopScrapper() {
 
 	wppscrapper.isScrapping = false
+	wppscrapper.isFinished = false
 
 	for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
 		chatHandler := scrappingElement.Value.(ChatHandler)
@@ -113,39 +120,54 @@ func (wppscrapper *WppScrapper) StopScrapper() {
 	}
 }
 
-func (wppscrapper *WppScrapper) startScrapper(resume bool) {
+func (wppscrapper *WppScrapper) scrapRoutine(resume bool) {
 	simultSize := 1
-	//TODO: Tratar o final e errosx
+	//TODO: Tratar o erros
 	wppscrapper.isScrapping = true
+	wppscrapper.isFinished = false
 
 	for {
 
 		if !wppscrapper.isScrapping {
 			return
 		}
+		hasNext := wppscrapper.chatsToScrap.Len() > 0
+		handleFinishedScraps(wppscrapper)
+		hasScrapping := wppscrapper.chatsScrapping.Len() > 0
 
-		for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
-
-			scrapping := scrappingElement.Value.(*ChatHandler)
-
-			if scrapping.IsScrapped() {
-				wppscrapper.chatsScrapping.Remove(scrappingElement)
-				wppscrapper.chatsScrapped.PushBack(scrapping)
-			}
-		}
-
-		if wppscrapper.chatsScrapping.Len() < simultSize {
-			handlerToStart := wppscrapper.chatsToScrap.Front()
-			wppscrapper.chatsScrapping.PushBack(handlerToStart.Value)
-			wppscrapper.chatsToScrap.Remove(handlerToStart)
-
-			chat := handlerToStart.Value.(*ChatHandler)
-			go chat.StartChatScrapper(resume)
+		if wppscrapper.chatsScrapping.Len() < simultSize && hasNext {
+			startNext(wppscrapper, resume)
 			continue
 		}
 
+		if !hasNext && !hasScrapping {
+			wppscrapper.isFinished = true
+			wppscrapper.isScrapping = false
+			log.Println("WppScrapper finished to Scrap")
+			return
+		}
 		<-time.After(100 * time.Millisecond)
 	}
+}
+
+func handleFinishedScraps(wppscrapper *WppScrapper) {
+	for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
+
+		scrapping := scrappingElement.Value.(*ChatHandler)
+		if scrapping.IsScrapped() {
+			wppscrapper.chatsScrapping.Remove(scrappingElement)
+			wppscrapper.chatsScrapped.PushBack(scrapping)
+		}
+	}
+}
+
+func startNext(wppscrapper *WppScrapper, resume bool) {
+	handlerToStart := wppscrapper.chatsToScrap.Front()
+	wppscrapper.chatsScrapping.PushBack(handlerToStart.Value)
+	wppscrapper.chatsToScrap.Remove(handlerToStart)
+
+	chat := handlerToStart.Value.(*ChatHandler)
+	go chat.StartChatScrapper(resume)
 }
 
 func readSession(uuid string) (whatsapp.Session, error) {
