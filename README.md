@@ -10,6 +10,7 @@ Go module that implements a interface to github.com/Rhymen/go-whatsapp in order 
 - [ ] Collect and store chat infos like name, group or one-to-one, group members (if group), description and others
 - [ ] Make program reads config files and env variables to cofigurations like stored file path and other internal configuration thats could be configurable
 - [ ] Method to Stop the messages collect
+- [ ] WppScrapper should provide a efficient way to API client get each chat scrap stats (running, stoped, finished, queued) and chats list with some util properties (like name, and id).
 
 ## Main Problems
 

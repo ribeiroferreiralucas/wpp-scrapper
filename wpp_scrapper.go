@@ -16,6 +16,9 @@ import (
 //WppScrapper //TODO:
 type WppScrapper struct {
 	WhatsappConnection *whatsapp.Conn
+	Initialized        bool
+	initializationChan chan bool
+	chats              map[string]*Chat
 	chatsToScrap       *list.List
 	chatsScrapping     *list.List
 	chatsScrapped      *list.List
@@ -26,8 +29,11 @@ type WppScrapper struct {
 //InitializeConnection //TODO
 func InitializeConnection() *WppScrapper {
 	wppscrapper := &WppScrapper{
-		isScrapping: false,
-		isFinished:  false,
+		isScrapping:        false,
+		isFinished:         false,
+		Initialized:        false,
+		initializationChan: make(chan bool),
+		chats:              make(map[string]*Chat),
 	}
 
 	var err error
@@ -39,90 +45,127 @@ func InitializeConnection() *WppScrapper {
 }
 
 // Auth auths the user and returns id
-func (wppscrapper *WppScrapper) Auth(qrChan chan<- string) (string, error) {
-
-	qr := make(chan string)
-	go func() {
-		qrChan <- <-qr
-	}()
-
-	session, err := wppscrapper.WhatsappConnection.Login(qr)
-	if err != nil {
-		return "", fmt.Errorf("error during login: %v\n", err)
-	}
-
+func (w *WppScrapper) Auth(qrChan chan<- string) (string, error) {
 	uuid := uuid.New()
-	err = writeSession(session, uuid)
-	if err != nil {
-		return "", fmt.Errorf("error saving session: %v\n", err)
-	}
-	return uuid, nil
+	uuid, err := w.login(uuid, qrChan)
+	return uuid, err
 }
 
 // ReAuth auths the user and returns id
-func (wppscrapper *WppScrapper) ReAuth(qrChan chan<- string, uuid string) (string, error) {
+func (w *WppScrapper) ReAuth(qrChan chan<- string, uuid string) (string, error) {
 
-	session, err := readSession(uuid)
+	uuid, err := w.restoreLogin(uuid)
 	if err == nil {
-		session, err = wppscrapper.WhatsappConnection.RestoreWithSession(session)
-		if err == nil {
-			return uuid, nil
-		}
+		return uuid, err
 	}
+	uuid, err = w.login(uuid, qrChan)
+	return uuid, err
+}
+
+func (w *WppScrapper) WaitInitialization() chan bool {
+
+	return w.initializationChan
+}
+
+//GetChats recupera todos os Chats
+func (w *WppScrapper) GetChats() map[string]*Chat {
+	return w.chats
+}
+
+//StartScrapper Inicia a coleta de mensagens
+func (w *WppScrapper) StartScrapper(resume bool) {
+
+	w.chatsScrapped = list.New().Init()
+	w.chatsScrapping = list.New().Init()
+	w.chatsToScrap = list.New().Init()
+
+	for _, chat := range w.chats {
+		chatHandler := createMessageHandler(w.WhatsappConnection, chat.wppChat)
+		chat.handler = chatHandler
+		chat.status = Queue
+		chatHandler.setMessagesPerCallCount(100)
+		w.chatsToScrap.PushFront(chatHandler)
+	}
+	go w.scrapRoutine(resume)
+	return
+}
+
+func (w *WppScrapper) StopScrapper() {
+
+	w.isScrapping = false
+	w.isFinished = false
+
+	for scrappingElement := w.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
+		chatHandler := scrappingElement.Value.(*ChatHandler)
+		chatHandler.pauseChatScrapper()
+
+		chat := w.chats[chatHandler.chat.Jid]
+		chat.status = Stoped
+	}
+}
+
+func (w *WppScrapper) login(uuid string, qrChan chan<- string) (string, error) {
 
 	qr := make(chan string)
 	go func() {
 		qrChan <- <-qr
 	}()
-	session, err = wppscrapper.WhatsappConnection.Login(qr)
+	session, err := w.WhatsappConnection.Login(qr)
 	if err != nil {
-		return "", fmt.Errorf("Error during login: %v", err)
+		return uuid, fmt.Errorf("Error during login: %v", err)
 	}
 	err = writeSession(session, uuid)
 	if err != nil {
-		return "", fmt.Errorf("Error saving session: %v", err)
+		return uuid, fmt.Errorf("Error saving session: %v", err)
 	}
 
+	defer func() { go w.waitInitialization() }()
 	return uuid, nil
 }
 
-//TODO: Implementar uma forma boa de saber se a inicialização ja terminou (pegou as informações dos chats)
-
-//GetAllChats recupera todos os Chats
-func (wppscrapper *WppScrapper) GetAllChats() map[string]whatsapp.Chat {
-	return wppscrapper.WhatsappConnection.Store.Chats
-}
-
-//StartScrapper Inicia a coleta de mensagens
-func (wppscrapper *WppScrapper) StartScrapper(resume bool) {
-
-	wppscrapper.chatsScrapped = list.New().Init()
-	wppscrapper.chatsScrapping = list.New().Init()
-	wppscrapper.chatsToScrap = list.New().Init()
-
-	for _, chat := range wppscrapper.WhatsappConnection.Store.Chats {
-		chatHandler := CreateMessageHandler(wppscrapper.WhatsappConnection, chat)
-		chatHandler.SetMessagesPerCallCount(100)
-		wppscrapper.chatsToScrap.PushFront(chatHandler)
+func (w *WppScrapper) restoreLogin(uuid string) (string, error) {
+	session, err := readSession(uuid)
+	if err != nil {
+		return "", err
 	}
-	go wppscrapper.scrapRoutine(resume)
-	return
+	session, err = w.WhatsappConnection.RestoreWithSession(session)
+	if err != nil {
+		return "", err
+	}
+	defer func() { go w.waitInitialization() }()
+	return uuid, nil
 }
 
-func (wppscrapper *WppScrapper) StopScrapper() {
+func (w *WppScrapper) waitInitialization() {
 
-	wppscrapper.isScrapping = false
-	wppscrapper.isFinished = false
+	var chats map[string]whatsapp.Chat
+	for {
+		chats = w.WhatsappConnection.Store.Chats
+		if chats != nil && len(chats) > 0 {
+			log.Println("Initialized")
+			w.initializeChats()
+			w.Initialized = true
+			w.initializationChan <- true
+			break
+		}
+		fmt.Println("Chats Not Fonded, wainting 100 milliseconds to retry")
+		<-time.After(100 * time.Millisecond)
+	}
+}
 
-	for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
-		chatHandler := scrappingElement.Value.(ChatHandler)
-		chatHandler.PauseChatScrapper()
+func (w *WppScrapper) initializeChats() {
+	chats := w.WhatsappConnection.Store.Chats
+	for key, wppChat := range chats {
+		var chat Chat
+		wppChat2 := wppChat
+		chat.wppChat = &wppChat2
+		chat.status = Idle
+		w.chats[key] = &chat
 	}
 }
 
 func (wppscrapper *WppScrapper) scrapRoutine(resume bool) {
 	simultSize := 1
-	//TODO: Tratar o erros
 	wppscrapper.isScrapping = true
 	wppscrapper.isFinished = false
 
@@ -131,8 +174,9 @@ func (wppscrapper *WppScrapper) scrapRoutine(resume bool) {
 		if !wppscrapper.isScrapping {
 			return
 		}
-		hasNext := wppscrapper.chatsToScrap.Len() > 0
 		handleFinishedScraps(wppscrapper)
+
+		hasNext := wppscrapper.chatsToScrap.Len() > 0
 		hasScrapping := wppscrapper.chatsScrapping.Len() > 0
 
 		if wppscrapper.chatsScrapping.Len() < simultSize && hasNext {
@@ -153,10 +197,14 @@ func (wppscrapper *WppScrapper) scrapRoutine(resume bool) {
 func handleFinishedScraps(wppscrapper *WppScrapper) {
 	for scrappingElement := wppscrapper.chatsScrapping.Front(); scrappingElement != nil; scrappingElement = scrappingElement.Next() {
 
-		scrapping := scrappingElement.Value.(*ChatHandler)
-		if scrapping.IsScrapped() {
+		scrappingHandler := scrappingElement.Value.(*ChatHandler)
+		if scrappingHandler.isScrapped {
+			log.Println("Removing " + scrappingHandler.chat.Jid + " from scrapping list and adding on scrapped list")
 			wppscrapper.chatsScrapping.Remove(scrappingElement)
-			wppscrapper.chatsScrapped.PushBack(scrapping)
+			wppscrapper.chatsScrapped.PushBack(scrappingHandler)
+
+			chat := wppscrapper.chats[scrappingHandler.chat.Jid]
+			chat.status = Finished
 		}
 	}
 }
@@ -166,8 +214,11 @@ func startNext(wppscrapper *WppScrapper, resume bool) {
 	wppscrapper.chatsScrapping.PushBack(handlerToStart.Value)
 	wppscrapper.chatsToScrap.Remove(handlerToStart)
 
-	chat := handlerToStart.Value.(*ChatHandler)
-	go chat.StartChatScrapper(resume)
+	chatHandler := handlerToStart.Value.(*ChatHandler)
+	chat := wppscrapper.chats[chatHandler.chat.Jid]
+	chat.status = Running
+
+	go chatHandler.startChatScrapper(resume)
 }
 
 func readSession(uuid string) (whatsapp.Session, error) {
