@@ -3,6 +3,7 @@ package wppscrapper
 import (
 	"container/list"
 	"encoding/csv"
+	"encoding/json"
 	"log"
 	"os"
 	"strconv"
@@ -18,10 +19,11 @@ var headers = []string{"message_id", "timestamp", "chat_name", "chat", "sender",
 //ChatHandler //TODO
 type ChatHandler struct {
 	chat                 *whatsapp.Chat
+	chatInfo             *ChatInfo
 	messagesPerCallCount int
 	isScrapping          bool
 	isScrapped           bool
-	c                    *whatsapp.Conn
+	conn                 *whatsapp.Conn
 	lastMessage          string
 	lastMessageOwner     bool
 	shouldStopScrapper   bool
@@ -43,16 +45,45 @@ type Message struct {
 	Text            string
 }
 
+/*
+ {
+	 "id":"GROUPID@g.us",
+	 "owner":"OWNERID@c.us",
+	 "subject":"GROUP NAME",
+	 "creation":1592654382,
+	 "participants":[
+		 {"id":"XXX@c.us","isAdmin":false,"isSuperAdmin":false},
+		 {"id":"ID@c.us","isAdmin":false,"isSuperAdmin":false}
+		 ],
+	"subjectTime":1592654382,
+	"subjectOwner":"ID@c.us",
+	"desc":" DESC",
+	"descId":"738D7C3293DA5137DAA2C8C50F944369",
+	"descTime":1594328067,
+	"descOwner":"5521999034100@c.us"}
+
+*/
 type ChatInfo struct {
+	Jid               string       `json:"id"`
+	OwnerJid          string       `json:"owner"`
+	Name              string       `json:"subject"`
+	CreationTimestamp uint         `json:"creation"`
+	Participants      []ChatMember `json:"participants"`
+	Desc              string       `json:"desc"`
 }
 
-// CreateMessageHandler //TODO
-func CreateMessageHandler(conn *whatsapp.Conn, chat whatsapp.Chat) *ChatHandler {
+type ChatMember struct {
+	Jid          string `json:"id"`
+	isAdmin      bool
+	isSuperAdmin bool
+}
+
+func createMessageHandler(conn *whatsapp.Conn, chat *whatsapp.Chat) *ChatHandler {
 
 	h := ChatHandler{
 		messagesPerCallCount: 1,
-		c:                    conn,
-		chat:                 &chat,
+		conn:                 conn,
+		chat:                 chat,
 		isScrapping:          false,
 		isScrapped:           false,
 		lastMessage:          "",
@@ -66,12 +97,57 @@ func CreateMessageHandler(conn *whatsapp.Conn, chat whatsapp.Chat) *ChatHandler 
 
 }
 
-// StartChatScrapper //TODO
-func (h *ChatHandler) StartChatScrapper(resume bool) {
+//ShouldCallSynchronously is a MessageHandler interface method thats return if the handler should work async or sync
+func (h *ChatHandler) ShouldCallSynchronously() bool {
+	return true
+}
+
+//HandleError is a method to implements the interface of a minimal handler that is used to dispatch error messages. These errors occur on unexpected behavior by the websocket
+//connection or if we are unable to handle or interpret an incoming message. Error produced by user actions are not
+//dispatched through this handler. They are returned as an error on the specific function call.
+func (h *ChatHandler) HandleError(err error) {
+
+	//TODO: Implementar tratamento e resposta a erros
+
+	if e, ok := err.(*whatsapp.ErrConnectionFailed); ok {
+		log.Printf("Connection failed, underlying error: %v", e.Err)
+		log.Println("Waiting 30sec...")
+		<-time.After(30 * time.Second)
+		log.Println("Reconnecting...")
+		err := h.conn.Restore()
+		if err != nil {
+			log.Fatalf("Restore failed: %v", err)
+		}
+	} else {
+		log.Printf("error occoured: %v\n", err)
+	}
+}
+
+//HandleTextMessage TextMessageHandler interface needs to be implemented to receive text messages dispatched by the dispatcher.
+func (h *ChatHandler) HandleTextMessage(message whatsapp.TextMessage) {
+
+	newMessage := toMessage(message, *h)
+	h.collectedMessages.PushFront(newMessage)
+	log.Println(h.collectedMessages.Len())
+}
+
+//HandleRawMessage The RawMessageHandler interface needs to be implemented to receive raw messages dispatched by the dispatcher.
+// Raw messages are the raw protobuf structs instead of the easy-to-use structs in TextMessageHandler, ImageMessageHandler, etc..
+func (h *ChatHandler) HandleRawMessage(message *proto.WebMessageInfo) {
+
+	if h.collectedMessages.Len() > 1 {
+		return
+	}
+
+	h.lastMessage = *message.Key.Id
+	h.lastMessageOwner = message.Key.FromMe != nil && *message.Key.FromMe
+}
+
+func (h *ChatHandler) startChatScrapper(resume bool) {
 
 	log.Println("Starting Scrap for " + h.chat.Jid)
-
-	if resume && h.IsScrapped() {
+	h.fetchGroupInfo()
+	if resume && h.isScrapped {
 		log.Println("Stopped Scrap for " + h.chat.Jid + ". Chat already scrapped and resume mode is on")
 		return
 	}
@@ -108,59 +184,35 @@ func (h *ChatHandler) StartChatScrapper(resume bool) {
 		}
 		lastMessage = h.lastMessage
 
-		h.c.LoadChatMessages(h.chat.Jid, h.messagesPerCallCount, h.lastMessage, h.lastMessageOwner, false, h)
+		h.conn.LoadChatMessages(h.chat.Jid, h.messagesPerCallCount, h.lastMessage, h.lastMessageOwner, false, h)
 		h.writeMessages()
 
 		firstIteration = false
 	}
 }
+func (h *ChatHandler) fetchGroupInfo() {
 
-// PauseChatScrapper //TODO
-func (h *ChatHandler) PauseChatScrapper() {
+	info, _ := h.conn.GetGroupMetaData(h.chat.Jid)
+	infoJson := <-info
+
+	jsonBytes := []byte(infoJson)
+	var chatInfo ChatInfo
+	err := json.Unmarshal(jsonBytes, &chatInfo)
+	checkError("Failed to Unmarshal", err)
+	log.Println(chatInfo)
+}
+
+// pauseChatScrapper //TODO
+func (h *ChatHandler) pauseChatScrapper() {
 	h.shouldStopScrapper = true
 }
 
-//ShouldCallSynchronously //TODO
-func (h *ChatHandler) ShouldCallSynchronously() bool {
-	return true
-}
+func (h *ChatHandler) setMessagesPerCallCount(messagesPerCallCount int) {
 
-//HandleError //TODO
-func (h *ChatHandler) HandleError(err error) {
-
-	//TODO: Implementar tratamento e resposta a erros
-
-	if e, ok := err.(*whatsapp.ErrConnectionFailed); ok {
-		log.Printf("Connection failed, underlying error: %v", e.Err)
-		log.Println("Waiting 30sec...")
-		<-time.After(30 * time.Second)
-		log.Println("Reconnecting...")
-		err := h.c.Restore()
-		if err != nil {
-			log.Fatalf("Restore failed: %v", err)
-		}
-	} else {
-		log.Printf("error occoured: %v\n", err)
+	if messagesPerCallCount < 1 {
+		messagesPerCallCount = 1
 	}
-}
-
-//HandleTextMessage //TODO
-func (h *ChatHandler) HandleTextMessage(message whatsapp.TextMessage) {
-
-	newMessage := toMessage(message, *h)
-	h.collectedMessages.PushFront(newMessage)
-	log.Println(h.collectedMessages.Len())
-}
-
-//HandleRawMessage //TODO
-func (h *ChatHandler) HandleRawMessage(message *proto.WebMessageInfo) {
-
-	if h.collectedMessages.Len() > 1 {
-		return
-	}
-
-	h.lastMessage = *message.Key.Id
-	h.lastMessageOwner = message.Key.FromMe != nil && *message.Key.FromMe
+	h.messagesPerCallCount = messagesPerCallCount
 }
 
 func (h *ChatHandler) writeMessages() {
@@ -176,30 +228,6 @@ func (h *ChatHandler) writeMessages() {
 	h.collectedMessages.Init()
 }
 
-func (h *ChatHandler) Chat() *whatsapp.Chat {
-	return h.chat
-}
-
-func (h *ChatHandler) SetMessagesPerCallCount(messagesPerCallCount int) {
-
-	if messagesPerCallCount < 1 {
-		messagesPerCallCount = 1
-	}
-	h.messagesPerCallCount = messagesPerCallCount
-}
-
-func (h *ChatHandler) GetMessagesPerCallCount() int {
-	return h.messagesPerCallCount
-}
-
-func (h *ChatHandler) IsScrapping() bool {
-	return h.isScrapping
-}
-
-func (h *ChatHandler) IsScrapped() bool {
-	return h.isScrapped
-}
-
 func (h *ChatHandler) finishedScrapper() {
 
 	h.writer.Flush()
@@ -208,11 +236,8 @@ func (h *ChatHandler) finishedScrapper() {
 	err := os.Rename(h.chat.Jid+"-messages.temp", h.chat.Jid+"-messages.csv")
 	checkError("Cannot rename file from .temp to .csv", err)
 
-	info, _ := h.c.GetGroupMetaData(h.chat.Jid)
-	infoJson := <-info
-	log.Println(infoJson)
+	// h.ChatInfo
 	//TODO: Implementar lógica de recuperar informações do grupo
-
 	h.isScrapped = true
 	h.isScrapping = false
 }
@@ -232,6 +257,7 @@ func (h *ChatHandler) hasTempFile() bool {
 
 	return err == nil
 }
+
 func (h *ChatHandler) hasFinalFile() bool {
 
 	_, err := os.Stat(h.chat.Jid + "-messages.csv")
@@ -257,7 +283,6 @@ func (h *ChatHandler) reopenFile() {
 	h.lastMessageOwner, _ = strconv.ParseBool(data[rowsCount-1][6])
 
 	h.writer = csv.NewWriter(file)
-
 }
 
 func (h *ChatHandler) createWriter() {
@@ -272,6 +297,7 @@ func (h *ChatHandler) createWriter() {
 func toCsv(message Message) []string {
 	return []string{message.MessageID, strconv.FormatUint(message.Timestamp, 10), message.ChatName, message.ChatID, message.Sender, strconv.FormatBool(message.IsForwarded), strconv.FormatBool(message.FromMe), message.QuotedMessageID, message.Text}
 }
+
 func toMessage(wppMessage whatsapp.TextMessage, handler ChatHandler) Message {
 
 	var jid string
@@ -284,7 +310,7 @@ func toMessage(wppMessage whatsapp.TextMessage, handler ChatHandler) Message {
 	message := Message{
 		MessageID:       wppMessage.Info.Id,
 		ChatID:          wppMessage.Info.RemoteJid,
-		ChatName:        handler.c.Store.Chats[wppMessage.Info.RemoteJid].Name,
+		ChatName:        handler.conn.Store.Chats[wppMessage.Info.RemoteJid].Name,
 		Sender:          jid,
 		Timestamp:       wppMessage.Info.Timestamp,
 		IsForwarded:     wppMessage.ContextInfo.IsForwarded,
