@@ -6,12 +6,12 @@ import (
 	"time"
 
 	qrcodeTerminal "github.com/Baozisoftware/qrcode-terminal-go"
-	wppscrapper "github.com/ribeiroferreiralucas/wpp-scrapper"
+	"github.com/ribeiroferreiralucas/wpp-scrapper/wppscrapperimp"
 )
 
 func main() {
 
-	scrapper := wppscrapper.InitializeConnection()
+	scrapper := wppscrapperimp.InitializeConnection()
 
 	qr := make(chan string)
 	go func() {
@@ -24,7 +24,7 @@ func main() {
 		log.Fatalf("error scrapper.ReAuth in: %v\n", err)
 	}
 
-	if !scrapper.Initialized {
+	if !scrapper.Initialized() {
 		<-scrapper.WaitInitialization()
 	}
 

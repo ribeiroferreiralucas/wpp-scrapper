@@ -1,4 +1,4 @@
-package wppscrapper
+package wppscrapperimp
 
 import (
 	"container/list"
@@ -14,12 +14,16 @@ import (
 	"github.com/Rhymen/go-whatsapp/binary/proto"
 )
 
-var headers = []string{"message_id", "timestamp", "chat_name", "chat", "sender", "is_forwarded", "from_me", "quoted_message_id", "message"}
+var messagesHeaders = []string{"message_id", "timestamp", "chat_name", "chat", "sender", "is_forwarded", "from_me", "quoted_message_id", "message"}
+var chatMetaHeaders = []string{"id", "name", "owner", "desc", "creation_timestamp"}
+var participantsHeaders = []string{"member_id", "is_admin", "is_super_admin"}
+
+// return []string{chatInfo.Jid, chatInfo.Name, chatInfo.OwnerJid, chatInfo.Desc, strconv.FormatUint(uint64(chatInfo.CreationTimestamp), 10)}
 
 //ChatHandler //TODO
 type ChatHandler struct {
 	chat                 *whatsapp.Chat
-	chatInfo             *ChatInfo
+	chatInfo             *chatInfo
 	messagesPerCallCount int
 	isScrapping          bool
 	isScrapped           bool
@@ -32,8 +36,7 @@ type ChatHandler struct {
 	file                 *os.File
 }
 
-//Message //TODO
-type Message struct {
+type message struct {
 	MessageID       string
 	Timestamp       uint64
 	ChatName        string
@@ -45,34 +48,16 @@ type Message struct {
 	Text            string
 }
 
-/*
- {
-	 "id":"GROUPID@g.us",
-	 "owner":"OWNERID@c.us",
-	 "subject":"GROUP NAME",
-	 "creation":1592654382,
-	 "participants":[
-		 {"id":"XXX@c.us","isAdmin":false,"isSuperAdmin":false},
-		 {"id":"ID@c.us","isAdmin":false,"isSuperAdmin":false}
-		 ],
-	"subjectTime":1592654382,
-	"subjectOwner":"ID@c.us",
-	"desc":" DESC",
-	"descId":"738D7C3293DA5137DAA2C8C50F944369",
-	"descTime":1594328067,
-	"descOwner":"5521999034100@c.us"}
-
-*/
-type ChatInfo struct {
+type chatInfo struct {
 	Jid               string       `json:"id"`
 	OwnerJid          string       `json:"owner"`
 	Name              string       `json:"subject"`
 	CreationTimestamp uint         `json:"creation"`
-	Participants      []ChatMember `json:"participants"`
+	Participants      []chatMember `json:"participants"`
 	Desc              string       `json:"desc"`
 }
 
-type ChatMember struct {
+type chatMember struct {
 	Jid          string `json:"id"`
 	isAdmin      bool
 	isSuperAdmin bool
@@ -159,7 +144,7 @@ func (h *ChatHandler) startChatScrapper(resume bool) {
 
 	if !resume || !h.hasTempFile() {
 		h.createWriter()
-		h.writer.Write(headers)
+		h.writer.Write(messagesHeaders)
 		log.Println("starting Scrap " + h.chat.Jid + ". Resume mode is off")
 	} else {
 		h.reopenFile()
@@ -193,12 +178,18 @@ func (h *ChatHandler) startChatScrapper(resume bool) {
 func (h *ChatHandler) fetchGroupInfo() {
 
 	info, _ := h.conn.GetGroupMetaData(h.chat.Jid)
-	infoJson := <-info
+	infoJSON := <-info
 
-	jsonBytes := []byte(infoJson)
-	var chatInfo ChatInfo
+	jsonBytes := []byte(infoJSON)
+	var chatInfo chatInfo
 	err := json.Unmarshal(jsonBytes, &chatInfo)
 	checkError("Failed to Unmarshal", err)
+
+	if chatInfo.Jid == "" {
+		return
+	}
+
+	h.chatInfo = &chatInfo
 	log.Println(chatInfo)
 }
 
@@ -218,8 +209,8 @@ func (h *ChatHandler) setMessagesPerCallCount(messagesPerCallCount int) {
 func (h *ChatHandler) writeMessages() {
 
 	for messageNode := h.collectedMessages.Front(); messageNode != nil; messageNode = messageNode.Next() {
-		message := messageNode.Value.(Message)
-		data := toCsv(message)
+		message := messageNode.Value.(message)
+		data := messageToCsv(message)
 		h.writer.Write(data)
 		log.Println(data)
 	}
@@ -230,25 +221,50 @@ func (h *ChatHandler) writeMessages() {
 
 func (h *ChatHandler) finishedScrapper() {
 
-	h.writer.Flush()
-	h.file.Close()
+	closeWriter(h)
 
 	err := os.Rename(h.chat.Jid+"-messages.temp", h.chat.Jid+"-messages.csv")
 	checkError("Cannot rename file from .temp to .csv", err)
 
-	// h.ChatInfo
-	//TODO: Implementar lógica de recuperar informações do grupo
+	if h.chatInfo != nil {
+		writeChatMeta(h)
+		writeParticipants(h)
+	}
+
 	h.isScrapped = true
 	h.isScrapping = false
 }
 
 func (h *ChatHandler) stoppedScrapper() {
 
-	h.writer.Flush()
-	h.file.Close()
+	closeWriter(h)
 
 	h.isScrapped = false
 	h.isScrapping = false
+}
+func writeChatMeta(h *ChatHandler) {
+
+	file, err := os.Create(h.chat.Jid + "-metainfo.csv")
+	checkError("Cannot create file", err)
+	writer := csv.NewWriter(file)
+
+	writer.Write(chatMetaHeaders)
+	writer.Write(chatMetaToCsv(*h.chatInfo))
+
+	writer.Flush()
+	file.Close()
+}
+
+func writeParticipants(h *ChatHandler) {
+
+	file, err := os.Create(h.chat.Jid + "-participants.csv")
+	checkError("Cannot create file", err)
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+	defer file.Close()
+
+	writer.Write(participantsHeaders)
+	writer.WriteAll(membersToCsv(*h.chatInfo))
 }
 
 func (h *ChatHandler) hasTempFile() bool {
@@ -294,11 +310,34 @@ func (h *ChatHandler) createWriter() {
 	h.file = file
 }
 
-func toCsv(message Message) []string {
-	return []string{message.MessageID, strconv.FormatUint(message.Timestamp, 10), message.ChatName, message.ChatID, message.Sender, strconv.FormatBool(message.IsForwarded), strconv.FormatBool(message.FromMe), message.QuotedMessageID, message.Text}
+func closeWriter(h *ChatHandler) {
+	h.writer.Flush()
+	h.file.Close()
 }
 
-func toMessage(wppMessage whatsapp.TextMessage, handler ChatHandler) Message {
+func messageToCsv(message message) []string {
+	return []string{message.MessageID, strconv.FormatUint(message.Timestamp, 10), message.ChatName, message.ChatID, message.Sender, strconv.FormatBool(message.IsForwarded), strconv.FormatBool(message.FromMe), message.QuotedMessageID, message.Text}
+}
+func chatMetaToCsv(chatInfo chatInfo) []string {
+	return []string{chatInfo.Jid, chatInfo.Name, chatInfo.OwnerJid, chatInfo.Desc, strconv.FormatUint(uint64(chatInfo.CreationTimestamp), 10)}
+}
+
+func membersToCsv(chatInfo chatInfo) [][]string {
+
+	participantsCount := len(chatInfo.Participants)
+
+	var participantsCsv [][]string
+
+	for i := 0; i < participantsCount; i++ {
+		participant := chatInfo.Participants[i]
+		row := []string{participant.Jid, strconv.FormatBool(participant.isAdmin), strconv.FormatBool(participant.isSuperAdmin)}
+		participantsCsv = append(participantsCsv, row)
+	}
+
+	return participantsCsv
+}
+
+func toMessage(wppMessage whatsapp.TextMessage, handler ChatHandler) message {
 
 	var jid string
 	if wppMessage.Info.Source.Participant == nil {
@@ -307,7 +346,7 @@ func toMessage(wppMessage whatsapp.TextMessage, handler ChatHandler) Message {
 		jid = *wppMessage.Info.Source.Participant
 	}
 
-	message := Message{
+	message := message{
 		MessageID:       wppMessage.Info.Id,
 		ChatID:          wppMessage.Info.RemoteJid,
 		ChatName:        handler.conn.Store.Chats[wppMessage.Info.RemoteJid].Name,
