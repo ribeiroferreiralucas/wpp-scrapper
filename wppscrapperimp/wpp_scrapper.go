@@ -16,28 +16,27 @@ import (
 
 //WppScrapper //TODO:
 type WppScrapper struct {
-	// wppscrapper.IWppScrapper
-	WhatsappConnection *whatsapp.Conn
-	initialized        bool
-	initializationChan chan bool
-	chats              map[string]wppscrapper.Chat
-	chatsToScrap       *list.List
-	chatsScrapping     *list.List
-	chatsScrapped      *list.List
-	isScrapping        bool
-	isFinished         bool
+	WhatsappConnection     *whatsapp.Conn
+	initialized            bool
+	initializationChan     chan bool
+	chats                  map[string]wppscrapper.Chat
+	chatsToScrap           *list.List
+	chatsScrapping         *list.List
+	chatsScrapped          *list.List
+	isScrapping            bool
+	isFinished             bool
+	wppScraperEventHandler *WppScrapperEventHandler
 }
 
 //InitializeConnection //TODO
 func InitializeConnection() wppscrapper.IWppScrapper {
-	// var wppscrapper *wppscrapper.IWppScrapper
-
 	wppscrapper := &WppScrapper{
-		isScrapping:        false,
-		isFinished:         false,
-		initialized:        false,
-		initializationChan: make(chan bool),
-		chats:              make(map[string]wppscrapper.Chat),
+		isScrapping:            false,
+		isFinished:             false,
+		initialized:            false,
+		initializationChan:     make(chan bool),
+		chats:                  make(map[string]wppscrapper.Chat),
+		wppScraperEventHandler: newWppScrapperEventHandler(),
 	}
 
 	var err error
@@ -113,6 +112,11 @@ func (w *WppScrapper) StopScrapper() {
 		chat := w.chats[chatHandler.chat.Jid]
 		chat.(*Chat).status = wppscrapper.Stoped
 	}
+	w.wppScraperEventHandler.onScrapperStoppedEvent.Submit(w, false)
+}
+
+func (w *WppScrapper) GetWppScrapperEventHandler() wppscrapper.IWppScrapperEventHandler {
+	return w.wppScraperEventHandler
 }
 
 func (w *WppScrapper) login(uuid string, qrChan chan<- string) (string, error) {
@@ -176,30 +180,32 @@ func (w *WppScrapper) initializeChats() {
 	}
 }
 
-func (wppscrapper *WppScrapper) scrapRoutine(resume bool) {
+func (w *WppScrapper) scrapRoutine(resume bool) {
 	simultSize := 1
-	wppscrapper.isScrapping = true
-	wppscrapper.isFinished = false
+	w.isScrapping = true
+	w.isFinished = false
+	w.wppScraperEventHandler.onScrapperStartedEvent.Submit(w, false)
 
 	for {
 
-		if !wppscrapper.isScrapping {
+		if !w.isScrapping {
 			return
 		}
-		handleFinishedScraps(wppscrapper)
+		handleFinishedScraps(w)
 
-		hasNext := wppscrapper.chatsToScrap.Len() > 0
-		hasScrapping := wppscrapper.chatsScrapping.Len() > 0
+		hasNext := w.chatsToScrap.Len() > 0
+		hasScrapping := w.chatsScrapping.Len() > 0
 
-		if wppscrapper.chatsScrapping.Len() < simultSize && hasNext {
-			startNext(wppscrapper, resume)
+		if w.chatsScrapping.Len() < simultSize && hasNext {
+			startNext(w, resume)
 			continue
 		}
 
 		if !hasNext && !hasScrapping {
-			wppscrapper.isFinished = true
-			wppscrapper.isScrapping = false
+			w.isFinished = true
+			w.isScrapping = false
 			log.Println("WppScrapper finished to Scrap")
+			w.wppScraperEventHandler.onScrapperFinishedEvent.Submit(w, false)
 			return
 		}
 		<-time.After(100 * time.Millisecond)
@@ -217,6 +223,7 @@ func handleFinishedScraps(scrapper *WppScrapper) {
 
 			chat := scrapper.chats[scrappingHandler.chat.Jid]
 			chat.(*Chat).status = wppscrapper.Finished
+			scrapper.wppScraperEventHandler.onChatScrapfinishedEvent.Submit(chat, false)
 		}
 	}
 }
@@ -229,6 +236,7 @@ func startNext(scrapper *WppScrapper, resume bool) {
 	chatHandler := handlerToStart.Value.(*ChatHandler)
 	chat := scrapper.chats[chatHandler.chat.Jid]
 	chat.(*Chat).status = wppscrapper.Running
+	scrapper.wppScraperEventHandler.onChatScrapStartedEvent.Submit(chat, false)
 
 	go chatHandler.startChatScrapper(resume)
 }

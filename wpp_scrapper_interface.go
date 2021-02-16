@@ -8,6 +8,7 @@ type IWppScrapper interface {
 	GetChats() map[string]Chat
 	StartScrapper(resume bool)
 	StopScrapper()
+	GetWppScrapperEventHandler() IWppScrapperEventHandler
 }
 
 type ChatStatus int
@@ -24,4 +25,34 @@ type Chat interface {
 	Name() string
 	Jid() string
 	GetStatus() ChatStatus
+}
+
+type IWppScrapperStartedListener interface {
+	OnWppScrapperStarted(wppScrapper IWppScrapper)
+}
+type IWppScrapperStoppedListener interface {
+	OnWppScrapperStopped(wppScrapper IWppScrapper)
+}
+type IWppScrapperFinishedListener interface {
+	OnWppScrapperFinished(wppScrapper IWppScrapper)
+}
+type IWppScrapperChatScrapStartedListener interface {
+	OnWppScrapperChatScrapStarted(chat Chat)
+}
+type IWppScrapperChatScrapFinishedListener interface {
+	OnWppScrapperChatScrapFinished(chat Chat)
+}
+
+type IWppScrapperEventHandler interface {
+	AddOnScrapperStartedListenner(IWppScrapperStartedListener)
+	AddOnScrapperStoppedListenner(IWppScrapperStoppedListener)
+	AddOnScrapperFinishedListenner(IWppScrapperFinishedListener)
+	AddOnChatScrapStartedListenner(IWppScrapperChatScrapStartedListener)
+	AddOnChatScrapFinishedListenner(IWppScrapperChatScrapFinishedListener)
+
+	RemoveOnScrapperStartedListenner(IWppScrapperStartedListener)
+	RemoveOnScrapperStoppedListenner(IWppScrapperStoppedListener)
+	RemoveOnScrapperFinishedListenner(IWppScrapperFinishedListener)
+	RemoveOnChatScrapStartedListenner(IWppScrapperChatScrapStartedListener)
+	RemoveOnChatScrapFinishedListenner(IWppScrapperChatScrapFinishedListener)
 }
