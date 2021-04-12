@@ -1,58 +1,113 @@
 package wppscrapperimp
 
 import (
-	bus "github.com/jackhopner/go-events"
 	wppscrapper "github.com/ribeiroferreiralucas/wpp-scrapper"
 )
 
 type WppScrapperEventHandler struct {
-	onScrapperStartedEvent   bus.EventBus
-	onScrapperStoppedEvent   bus.EventBus
-	onScrapperFinishedEvent  bus.EventBus
-	onChatScrapStartedEvent  bus.EventBus
-	onChatScrapfinishedEvent bus.EventBus
+	onScrapperStartedListeners   map[wppscrapper.IWppScrapperStartedListener]struct{}
+	onScrapperStoppedListeners   map[wppscrapper.IWppScrapperStoppedListener]struct{}
+	onScrapperFinishedListeners  map[wppscrapper.IWppScrapperFinishedListener]struct{}
+	onChatScrapStartedListeners  map[wppscrapper.IWppScrapperChatScrapStartedListener]struct{}
+	onChatScrapfinishedListeners map[wppscrapper.IWppScrapperChatScrapFinishedListener]struct{}
 }
 
 func newWppScrapperEventHandler() *WppScrapperEventHandler {
 	return &WppScrapperEventHandler{
-		onScrapperStartedEvent:   bus.NewEventBus(),
-		onScrapperStoppedEvent:   bus.NewEventBus(),
-		onScrapperFinishedEvent:  bus.NewEventBus(),
-		onChatScrapStartedEvent:  bus.NewEventBus(),
-		onChatScrapfinishedEvent: bus.NewEventBus(),
+		onScrapperStartedListeners:   map[wppscrapper.IWppScrapperStartedListener]struct{}{},
+		onScrapperStoppedListeners:   map[wppscrapper.IWppScrapperStoppedListener]struct{}{},
+		onScrapperFinishedListeners:  map[wppscrapper.IWppScrapperFinishedListener]struct{}{},
+		onChatScrapStartedListeners:  map[wppscrapper.IWppScrapperChatScrapStartedListener]struct{}{},
+		onChatScrapfinishedListeners: map[wppscrapper.IWppScrapperChatScrapFinishedListener]struct{}{},
 	}
 
 }
 
-func (w *WppScrapperEventHandler) AddOnScrapperStartedListenner(listener wppscrapper.IWppScrapperStartedListener) {
-	w.onScrapperStartedEvent.Register(listener)
+func (w *WppScrapperEventHandler) AddOnScrapperStartedListener(listener wppscrapper.IWppScrapperStartedListener) {
+	w.onScrapperStartedListeners[listener] = struct{}{}
 }
-func (w *WppScrapperEventHandler) AddOnScrapperStoppedListenner(listener wppscrapper.IWppScrapperStoppedListener) {
-	w.onScrapperStoppedEvent.Register(listener)
-}
-func (w *WppScrapperEventHandler) AddOnScrapperFinishedListenner(listener wppscrapper.IWppScrapperFinishedListener) {
-	w.onScrapperFinishedEvent.Register(listener)
-}
-func (w *WppScrapperEventHandler) AddOnChatScrapStartedListenner(listener wppscrapper.IWppScrapperChatScrapStartedListener) {
-	w.onChatScrapStartedEvent.Register(listener)
-}
-func (w *WppScrapperEventHandler) AddOnChatScrapFinishedListenner(listener wppscrapper.IWppScrapperChatScrapFinishedListener) {
-	w.onChatScrapfinishedEvent.Register(listener)
-}
-
-func (w *WppScrapperEventHandler) RemoveOnScrapperStartedListenner(listener wppscrapper.IWppScrapperStartedListener) {
-	w.onScrapperStartedEvent.Deregister(listener)
+func (w *WppScrapperEventHandler) AddOnScrapperStoppedListener(listener wppscrapper.IWppScrapperStoppedListener) {
+	w.onScrapperStoppedListeners[listener] = struct{}{}
 
 }
-func (w *WppScrapperEventHandler) RemoveOnScrapperStoppedListenner(listener wppscrapper.IWppScrapperStoppedListener) {
-	w.onScrapperStoppedEvent.Deregister(listener)
+func (w *WppScrapperEventHandler) AddOnScrapperFinishedListener(listener wppscrapper.IWppScrapperFinishedListener) {
+	w.onScrapperFinishedListeners[listener] = struct{}{}
+
 }
-func (w *WppScrapperEventHandler) RemoveOnScrapperFinishedListenner(listener wppscrapper.IWppScrapperFinishedListener) {
-	w.onScrapperFinishedEvent.Deregister(listener)
+func (w *WppScrapperEventHandler) AddOnChatScrapStartedListener(listener wppscrapper.IWppScrapperChatScrapStartedListener) {
+	w.onChatScrapStartedListeners[listener] = struct{}{}
 }
-func (w *WppScrapperEventHandler) RemoveOnChatScrapStartedListenner(listener wppscrapper.IWppScrapperChatScrapStartedListener) {
-	w.onChatScrapStartedEvent.Deregister(listener)
+func (w *WppScrapperEventHandler) AddOnChatScrapFinishedListener(listener wppscrapper.IWppScrapperChatScrapFinishedListener) {
+	w.onChatScrapfinishedListeners[listener] = struct{}{}
 }
-func (w *WppScrapperEventHandler) RemoveOnChatScrapFinishedListenner(listener wppscrapper.IWppScrapperChatScrapFinishedListener) {
-	w.onChatScrapfinishedEvent.Deregister(listener)
+
+func (w *WppScrapperEventHandler) RemoveOnScrapperStartedListener(listener wppscrapper.IWppScrapperStartedListener) {
+	delete(w.onScrapperStartedListeners, listener)
+}
+func (w *WppScrapperEventHandler) RemoveOnScrapperStoppedListener(listener wppscrapper.IWppScrapperStoppedListener) {
+	delete(w.onScrapperStoppedListeners, listener)
+}
+func (w *WppScrapperEventHandler) RemoveOnScrapperFinishedListener(listener wppscrapper.IWppScrapperFinishedListener) {
+	delete(w.onScrapperFinishedListeners, listener)
+}
+func (w *WppScrapperEventHandler) RemoveOnChatScrapStartedListener(listener wppscrapper.IWppScrapperChatScrapStartedListener) {
+	delete(w.onChatScrapStartedListeners, listener)
+}
+func (w *WppScrapperEventHandler) RemoveOnChatScrapFinishedListener(listener wppscrapper.IWppScrapperChatScrapFinishedListener) {
+	delete(w.onChatScrapfinishedListeners, listener)
+}
+
+func (w *WppScrapperEventHandler) RaiseOnScrapperStartedEvent(wppScrapper wppscrapper.IWppScrapper) {
+
+	for listener := range w.onScrapperStartedListeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.OnWppScrapperStarted(wppScrapper)
+	}
+}
+
+func (w *WppScrapperEventHandler) RaiseOnScrapperStoppedEvent(wppScrapper wppscrapper.IWppScrapper) {
+
+	for listener := range w.onScrapperStoppedListeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.OnWppScrapperStopped(wppScrapper)
+	}
+}
+
+func (w *WppScrapperEventHandler) RaiseOnScrapperFinishedEvent(wppScrapper wppscrapper.IWppScrapper) {
+
+	for listener := range w.onScrapperFinishedListeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.OnWppScrapperFinished(wppScrapper)
+	}
+}
+
+func (w *WppScrapperEventHandler) RaiseOnChatScrapStartedEvent(chat wppscrapper.Chat) {
+
+	for listener := range w.onChatScrapStartedListeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.OnWppScrapperChatScrapStarted(chat)
+	}
+}
+
+func (w *WppScrapperEventHandler) RaiseOnChatScrapFinishedEvent(chat wppscrapper.Chat) {
+
+	for listener := range w.onChatScrapfinishedListeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.OnWppScrapperChatScrapFinished(chat)
+	}
 }

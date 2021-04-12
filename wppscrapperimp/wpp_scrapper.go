@@ -97,7 +97,6 @@ func (w *WppScrapper) StartScrapper(resume bool) {
 
 	}
 	go w.scrapRoutine(resume)
-	return
 }
 
 func (w *WppScrapper) StopScrapper() {
@@ -112,7 +111,7 @@ func (w *WppScrapper) StopScrapper() {
 		chat := w.chats[chatHandler.chat.Jid]
 		chat.(*Chat).status = wppscrapper.Stoped
 	}
-	w.wppScraperEventHandler.onScrapperStoppedEvent.Submit(w, false)
+	w.wppScraperEventHandler.RaiseOnScrapperStoppedEvent(w)
 }
 
 func (w *WppScrapper) GetWppScrapperEventHandler() wppscrapper.IWppScrapperEventHandler {
@@ -156,7 +155,7 @@ func (w *WppScrapper) waitInitialization() {
 	var chats map[string]whatsapp.Chat
 	for {
 		chats = w.WhatsappConnection.Store.Chats
-		if chats != nil && len(chats) > 0 {
+		if len(chats) > 0 {
 			log.Println("Initialized")
 			w.initializeChats()
 			w.initialized = true
@@ -184,7 +183,8 @@ func (w *WppScrapper) scrapRoutine(resume bool) {
 	simultSize := 1
 	w.isScrapping = true
 	w.isFinished = false
-	w.wppScraperEventHandler.onScrapperStartedEvent.Submit(w, false)
+
+	w.wppScraperEventHandler.RaiseOnScrapperStoppedEvent(w)
 
 	for {
 
@@ -205,7 +205,7 @@ func (w *WppScrapper) scrapRoutine(resume bool) {
 			w.isFinished = true
 			w.isScrapping = false
 			log.Println("WppScrapper finished to Scrap")
-			w.wppScraperEventHandler.onScrapperFinishedEvent.Submit(w, false)
+			w.wppScraperEventHandler.RaiseOnScrapperFinishedEvent(w)
 			return
 		}
 		<-time.After(100 * time.Millisecond)
@@ -223,7 +223,7 @@ func handleFinishedScraps(scrapper *WppScrapper) {
 
 			chat := scrapper.chats[scrappingHandler.chat.Jid]
 			chat.(*Chat).status = wppscrapper.Finished
-			scrapper.wppScraperEventHandler.onChatScrapfinishedEvent.Submit(chat, false)
+			scrapper.wppScraperEventHandler.RaiseOnChatScrapFinishedEvent(chat)
 		}
 	}
 }
@@ -236,7 +236,7 @@ func startNext(scrapper *WppScrapper, resume bool) {
 	chatHandler := handlerToStart.Value.(*ChatHandler)
 	chat := scrapper.chats[chatHandler.chat.Jid]
 	chat.(*Chat).status = wppscrapper.Running
-	scrapper.wppScraperEventHandler.onChatScrapStartedEvent.Submit(chat, false)
+	scrapper.wppScraperEventHandler.RaiseOnChatScrapStartedEvent(chat)
 
 	go chatHandler.startChatScrapper(resume)
 }
