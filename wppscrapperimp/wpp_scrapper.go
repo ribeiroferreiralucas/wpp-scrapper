@@ -184,7 +184,7 @@ func (w *WppScrapper) scrapRoutine(resume bool) {
 	w.isScrapping = true
 	w.isFinished = false
 
-	w.wppScraperEventHandler.RaiseOnScrapperStoppedEvent(w)
+	w.wppScraperEventHandler.RaiseOnScrapperStartedEvent(w)
 
 	for {
 
